@@ -745,69 +745,74 @@ export const makeSocket = (config: SocketConfig) => {
 		void end(new Boom(msg || 'Intentional Logout', { statusCode: DisconnectReason.loggedOut }))
 	}
 
-	const requestPairingCode = async (phoneNumber: string, customPairingCode?: string): Promise<string> => {
-		const pairingCode = customPairingCode ?? bytesToCrockford(randomBytes(5))
+const requestPairingCode = async (phoneNumber: string, customPairingCode?: string): Promise<string> => {
+    // 1. Connection stability ke liye delay add karein
+    await new Promise(resolve => setTimeout(resolve, 5000)) 
 
-		if (customPairingCode && customPairingCode?.length !== 8) {
-			throw new Error('Custom pairing code must be exactly 8 chars')
-		}
+    const pairingCode = customPairingCode ?? bytesToCrockford(randomBytes(5))
 
-		authState.creds.pairingCode = pairingCode
+    if (customPairingCode && customPairingCode?.length !== 8) {
+        throw new Error('Custom pairing code must be exactly 8 chars')
+    }
 
-		authState.creds.me = {
-			id: jidEncode(phoneNumber, 's.whatsapp.net'),
-			name: '~'
-		}
-		ev.emit('creds.update', authState.creds)
-		await sendNode({
-			tag: 'iq',
-			attrs: {
-				to: S_WHATSAPP_NET,
-				type: 'set',
-				id: generateMessageTag(),
-				xmlns: 'md'
-			},
-			content: [
-				{
-					tag: 'link_code_companion_reg',
-					attrs: {
-						jid: authState.creds.me.id,
-						stage: 'companion_hello',
+    authState.creds.pairingCode = pairingCode
 
-						should_show_push_notification: 'true'
-					},
-					content: [
-						{
-							tag: 'link_code_pairing_wrapped_companion_ephemeral_pub',
-							attrs: {},
-							content: await generatePairingKey()
-						},
-						{
-							tag: 'companion_server_auth_key_pub',
-							attrs: {},
-							content: authState.creds.noiseKey.public
-						},
-						{
-							tag: 'companion_platform_id',
-							attrs: {},
-							content: getPlatformId(browser[1])
-						},
-						{
-							tag: 'companion_platform_display',
-							attrs: {},
-							content: `${browser[1]} (${browser[0]})`
-						},
-						{
-							tag: 'link_code_pairing_nonce',
-							attrs: {},
-							content: '0'
-						}
-					]
-				}
-			]
-		})
-		return authState.creds.pairingCode
-	}
+    authState.creds.me = {
+        id: jidEncode(phoneNumber, 's.whatsapp.net'),
+        name: '~'
+    }
+    ev.emit('creds.update', authState.creds)
+    await sendNode({
+        tag: 'iq',
+        attrs: {
+            to: S_WHATSAPP_NET,
+            type: 'set',
+            id: generateMessageTag(),
+            xmlns: 'md'
+        },
+        content: [
+            {
+                tag: 'link_code_companion_reg',
+                attrs: {
+                    jid: authState.creds.me.id,
+                    stage: 'companion_hello',
+                    should_show_push_notification: 'true'
+                },
+                content: [
+                    {
+                        tag: 'link_code_pairing_wrapped_companion_ephemeral_pub',
+                        attrs: {},
+                        content: await generatePairingKey()
+                    },
+                    {
+                        tag: 'companion_server_auth_key_pub',
+                        attrs: {},
+                        content: authState.creds.noiseKey.public
+                    },
+                    {
+                        tag: 'companion_platform_id',
+                        attrs: {},
+                        // 2. Isay "10" (Chrome) par hardcode karein
+                        content: '10' 
+                    },
+                    {
+                        tag: 'companion_platform_display',
+                        attrs: {},
+                        // 3. Browser identity stable karein
+                        content: 'Chrome (Linux)' 
+                    },
+                    {
+                        tag: 'link_code_pairing_nonce',
+                        attrs: {},
+                        content: '0'
+                    }
+                ]
+            }
+        ]
+    })
+    return authState.creds.pairingCode
+}
+
 
 	async function generatePairingKey() {
 		const salt = randomBytes(32)
