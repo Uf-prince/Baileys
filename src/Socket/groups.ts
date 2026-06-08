@@ -32,19 +32,17 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 
 	// Helper: LID ko PN mein convert karo
 	const resolveParticipantJid = (jid: string): string => {
-		if (!isLidUser(jid)) return jid
-		// lidMapping mein check karo
-		const lidNum = jid.split('@')[0]
-		const mapping = (authState.creds as any).lidMapping
+		if (!jid || !isLidUser(jid)) return jid
+		const parts = jid.split('@')
+		const lidNum = parts[0]
+		if (!lidNum) return jid
+		const mapping = (authState.creds as any).lidMapping as Record<string, string> | undefined
 		if (mapping) {
-			// direct lid match
 			if (mapping[lidNum]) return `${mapping[lidNum]}@s.whatsapp.net`
-			// check all values
 			for (const [pn, lid] of Object.entries(mapping)) {
 				if (lid === lidNum || lid === jid) return `${pn}@s.whatsapp.net`
 			}
 		}
-		// fallback: return as-is
 		return jid
 	}
 
