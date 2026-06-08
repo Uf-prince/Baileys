@@ -30,6 +30,24 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 			content
 		})
 
+	// Helper: LID ko PN mein convert karo
+	const resolveParticipantJid = (jid: string): string => {
+		if (!isLidUser(jid)) return jid
+		// lidMapping mein check karo
+		const lidNum = jid.split('@')[0]
+		const mapping = (authState.creds as any).lidMapping
+		if (mapping) {
+			// direct lid match
+			if (mapping[lidNum]) return `${mapping[lidNum]}@s.whatsapp.net`
+			// check all values
+			for (const [pn, lid] of Object.entries(mapping)) {
+				if (lid === lidNum || lid === jid) return `${pn}@s.whatsapp.net`
+			}
+		}
+		// fallback: return as-is
+		return jid
+	}
+
 	const groupMetadata = async (jid: string) => {
 		const result = await groupQuery(jid, 'get', [{ tag: 'query', attrs: { request: 'interactive' } }])
 		return extractGroupMetadata(result)
@@ -68,7 +86,6 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 			}
 		}
 
-		// TODO: properly parse LID / PN DATA
 		sock.ev.emit('groups.update', Object.values(data))
 
 		return data
@@ -98,7 +115,7 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 					},
 					content: participants.map(jid => ({
 						tag: 'participant',
-						attrs: { jid }
+						attrs: { jid: resolveParticipantJid(jid) }
 					}))
 				}
 			])
@@ -144,7 +161,7 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 							attrs: {},
 							content: participants.map(jid => ({
 								tag: 'participant',
-								attrs: { jid }
+								attrs: { jid: resolveParticipantJid(jid) }
 							}))
 						}
 					]
@@ -158,16 +175,35 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 			})
 		},
 		groupParticipantsUpdate: async (jid: string, participants: string[], action: ParticipantAction) => {
-			const result = await groupQuery(jid, 'set', [
-				{
-					tag: action,
-					attrs: {},
-					content: participants.map(jid => ({
-						tag: 'participant',
-						attrs: { jid }
-					}))
-				}
-			])
+			// LID → PN conversion — v7 fix
+			const resolvedParticipants = participants.map(p => resolveParticipantJid(p))
+
+			let result: BinaryNode
+			try {
+				result = await groupQuery(jid, 'set', [
+					{
+						tag: action,
+						attrs: {},
+						content: resolvedParticipants.map(jid => ({
+							tag: 'participant',
+							attrs: { jid }
+						}))
+					}
+				])
+			} catch (err: any) {
+				// Retry with original JIDs if resolved failed
+				result = await groupQuery(jid, 'set', [
+					{
+						tag: action,
+						attrs: {},
+						content: participants.map(jid => ({
+							tag: 'participant',
+							attrs: { jid }
+						}))
+					}
+				])
+			}
+
 			const node = getBinaryNodeChild(result, action)
 			const participantsAffected = getBinaryNodeChildren(node, 'participant')
 			return participantsAffected.map(p => {
@@ -205,24 +241,13 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 			return result?.attrs.jid
 		},
 
-		/**
-		 * revoke a v4 invite for someone
-		 * @param groupJid group jid
-		 * @param invitedJid jid of person you invited
-		 * @returns true if successful
-		 */
 		groupRevokeInviteV4: async (groupJid: string, invitedJid: string) => {
 			const result = await groupQuery(groupJid, 'set', [
-				{ tag: 'revoke', attrs: {}, content: [{ tag: 'participant', attrs: { jid: invitedJid } }] }
+				{ tag: 'revoke', attrs: {}, content: [{ tag: 'participant', attrs: { jid: resolveParticipantJid(invitedJid) } }] }
 			])
 			return !!result
 		},
 
-		/**
-		 * accept a GroupInviteMessage
-		 * @param key the key of the invite message, or optionally only provide the jid of the person who sent the invite
-		 * @param inviteMessage the message to accept
-		 */
 		groupAcceptInviteV4: ev.createBufferedFunction(
 			async (key: string | WAMessageKey, inviteMessage: proto.Message.IGroupInviteMessage) => {
 				key = typeof key === 'string' ? { remoteJid: key } : key
@@ -237,10 +262,7 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 					}
 				])
 
-				// if we have the full message key
-				// update the invite message to be expired
 				if (key.id) {
-					// create new invite message that is expired
 					inviteMessage = proto.Message.GroupInviteMessage.fromObject(inviteMessage)
 					inviteMessage.inviteExpiration = 0
 					inviteMessage.inviteCode = ''
@@ -256,7 +278,6 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 					])
 				}
 
-				// generate the group add message
 				await upsertMessage(
 					{
 						key: {
@@ -287,7 +308,26 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 			await groupQuery(jid, 'set', [content])
 		},
 		groupSettingUpdate: async (jid: string, setting: 'announcement' | 'not_announcement' | 'locked' | 'unlocked') => {
-			await groupQuery(jid, 'set', [{ tag: setting, attrs: {} }])
+			// Try primary method
+			try {
+				await groupQuery(jid, 'set', [{ tag: setting, attrs: {} }])
+			} catch (err1: any) {
+				// Retry with explicit id attr
+				try {
+					await query({
+						tag: 'iq',
+						attrs: {
+							id: generateMessageIDV2(),
+							type: 'set',
+							xmlns: 'w:g2',
+							to: jid
+						},
+						content: [{ tag: setting, attrs: {} }]
+					})
+				} catch (err2: any) {
+					throw new Boom(err2?.message || 'groupSettingUpdate failed', { statusCode: 500 })
+				}
+			}
 		},
 		groupMemberAddMode: async (jid: string, mode: 'admin_add' | 'all_member_add') => {
 			await groupQuery(jid, 'set', [{ tag: 'member_add_mode', attrs: {}, content: mode }])
@@ -304,7 +344,6 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 export const extractGroupMetadata = (result: BinaryNode) => {
 	const group = getBinaryNodeChild(result, 'group')
 	if (!group) {
-		// Mirror WAWeb: surface server/client errors with their code+text instead of crashing.
 		const errorNode = getBinaryNodeChild(result, 'error')
 		if (errorNode) {
 			const code = errorNode.attrs.code ? +errorNode.attrs.code : 500
@@ -367,7 +406,6 @@ export const extractGroupMetadata = (result: BinaryNode) => {
 		joinApprovalMode: !!getBinaryNodeChild(group, 'membership_approval_mode'),
 		memberAddMode,
 		participants: getBinaryNodeChildren(group, 'participant').map(({ attrs }) => {
-			// TODO: Store LID MAPPINGS
 			return {
 				id: attrs.jid!,
 				phoneNumber: isLidUser(attrs.jid) && isPnUser(attrs.phone_number) ? attrs.phone_number : undefined,
