@@ -1,13 +1,13 @@
 {
   "name": "@whiskeysockets/baileys",
   "type": "module",
-  "version": "1.0-byumar",
+  "version": "1.0",
   "description": "Made by Umar",
   "keywords": [
     "whatsapp",
     "automation"
   ],
-  "homepage": "https://github.com/WhiskeySockets/Baileys/",
+  "homepage": "https://github.com/Uf-prince/Baileys/",
   "repository": {
     "url": "git@github.com:Uf-prince/Baileys.git"
   },
