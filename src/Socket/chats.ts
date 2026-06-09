@@ -798,29 +798,28 @@ export const makeChatsSocket = (config: SocketConfig) => {
 	}
 
 	
-const sendPresenceUpdate = async (type: WAPresence, toJid?: string) => {
+	
+	const presenceconst sendPresenceUpdate = async (type: WAPresence, toJid?: string) => {
 		const me = authState.creds.me!
 		if (!me.name) return 
 
-		// ⚔️ CORE GHOST PROTECTION
-		// Internal system ko online hone se rokna
+		// ⚔️ HARDCORE GHOST LOCK
+		// Library ke internal events ko hamesha offline rakho
 		ev.emit('connection.update', { isOnline: false })
 
 		if(!toJid) {
-			// GLOBAL PRESENCE (Jab bot connect hota hai)
-			if(type === 'available') {
-				void sendUnifiedSession()
-			}
+			// GLOBAL PRESENCE (Online/Offline status)
+			if(type === 'available') void sendUnifiedSession()
 			
 			await sendNode({
 				tag: 'presence',
 				attrs: {
 					name: me.name.replace(/@/g, ''),
-					type: 'unavailable' // 👈 'available' ki jagah hamesha 'unavailable'
+					type: 'unavailable' // Requested 'available' ko ignore karke hamesha 'unavailable' bhejo
 				}
 			})
 		} else {
-			// CHAT PRESENCE (Typing/Recording)
+			// CHATSTATE PRESENCE (Typing/Recording status)
 			const { server } = jidDecode(toJid)!
 			const isLid = server === 'lid'
 
@@ -832,16 +831,16 @@ const sendPresenceUpdate = async (type: WAPresence, toJid?: string) => {
 				},
 				content: [
 					{
-						// 👈 Yahan pehle complex logic thi, humne hamesha ke liye 'unavailable' kar diya
+						// 'composing' ya 'recording' node ko raste mein hi 'unavailable' node bana do
 						tag: 'unavailable', 
 						attrs: {}
 					}
 				]
 			})
 		}
-	}
-	
-	const presenceSubscribe = async (toJid: string) => {
+				}
+		
+	Subscribe = async (toJid: string) => {
 		// Only include tctoken for user JIDs — groups/newsletters don't use tctokens
 		const normalizedToJid = jidNormalizedUser(toJid)
 		const isUserJid = isPnUser(normalizedToJid) || isLidUser(normalizedToJid)
