@@ -1048,8 +1048,8 @@ export const makeSocket = (config: SocketConfig) => {
 		if (creds.me?.name !== name) {
 			logger.debug({ name }, 'updated pushName')
 			sendNode({
-				tag: 'presence',
-				attrs: { name: name! }
+				tag: 'presence',				
+attrs: { name: name!, type: 'unavailable' }				
 			}).catch(err => {
 				logger.warn({ trace: err.stack }, 'error in sending presence update on name change')
 			})
