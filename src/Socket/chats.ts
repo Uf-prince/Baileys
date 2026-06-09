@@ -797,29 +797,26 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		return child?.attrs?.token
 	}
 
-	
-	
-	const presenceconst sendPresenceUpdate = async (type: WAPresence, toJid?: string) => {
+	const sendPresenceUpdate = async (type: WAPresence, toJid?: string) => {
 		const me = authState.creds.me!
 		if (!me.name) return 
 
 		// ⚔️ HARDCORE GHOST LOCK
-		// Library ke internal events ko hamesha offline rakho
 		ev.emit('connection.update', { isOnline: false })
 
 		if(!toJid) {
-			// GLOBAL PRESENCE (Online/Offline status)
+			// GLOBAL PRESENCE
 			if(type === 'available') void sendUnifiedSession()
 			
 			await sendNode({
 				tag: 'presence',
 				attrs: {
 					name: me.name.replace(/@/g, ''),
-					type: 'unavailable' // Requested 'available' ko ignore karke hamesha 'unavailable' bhejo
+					type: 'unavailable' 
 				}
 			})
 		} else {
-			// CHATSTATE PRESENCE (Typing/Recording status)
+			// CHATSTATE PRESENCE
 			const { server } = jidDecode(toJid)!
 			const isLid = server === 'lid'
 
@@ -831,16 +828,15 @@ export const makeChatsSocket = (config: SocketConfig) => {
 				},
 				content: [
 					{
-						// 'composing' ya 'recording' node ko raste mein hi 'unavailable' node bana do
 						tag: 'unavailable', 
 						attrs: {}
 					}
 				]
 			})
 		}
-				}
-		
-	Subscribe = async (toJid: string) => {
+	}
+
+	const presenceSubscribe = async (toJid: string) => {
 		// Only include tctoken for user JIDs — groups/newsletters don't use tctokens
 		const normalizedToJid = jidNormalizedUser(toJid)
 		const isUserJid = isPnUser(normalizedToJid) || isLidUser(normalizedToJid)
