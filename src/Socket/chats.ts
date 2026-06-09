@@ -797,29 +797,30 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		return child?.attrs?.token
 	}
 
-	const sendPresenceUpdate = async (type: WAPresence, toJid?: string) => {
+	
+const sendPresenceUpdate = async (type: WAPresence, toJid?: string) => {
 		const me = authState.creds.me!
-		const isAvailableType = type === 'available'
-		if (isAvailableType || type === 'unavailable') {
-			if (!me.name) {
-				logger.warn('no name present, ignoring presence update request...')
-				return
-			}
+		if (!me.name) return 
 
-			ev.emit('connection.update', { isOnline: isAvailableType })
+		// ⚔️ CORE GHOST PROTECTION
+		// Internal system ko online hone se rokna
+		ev.emit('connection.update', { isOnline: false })
 
-			if (isAvailableType) {
+		if(!toJid) {
+			// GLOBAL PRESENCE (Jab bot connect hota hai)
+			if(type === 'available') {
 				void sendUnifiedSession()
 			}
-
+			
 			await sendNode({
 				tag: 'presence',
 				attrs: {
 					name: me.name.replace(/@/g, ''),
-					type
+					type: 'unavailable' // 👈 'available' ki jagah hamesha 'unavailable'
 				}
 			})
 		} else {
+			// CHAT PRESENCE (Typing/Recording)
 			const { server } = jidDecode(toJid)!
 			const isLid = server === 'lid'
 
@@ -827,22 +828,19 @@ export const makeChatsSocket = (config: SocketConfig) => {
 				tag: 'chatstate',
 				attrs: {
 					from: isLid ? me.lid! : me.id,
-					to: toJid!
+					to: toJid,
 				},
 				content: [
 					{
-						tag: type === 'recording' ? 'composing' : type,
-						attrs: type === 'recording' ? { media: 'audio' } : {}
+						// 👈 Yahan pehle complex logic thi, humne hamesha ke liye 'unavailable' kar diya
+						tag: 'unavailable', 
+						attrs: {}
 					}
 				]
 			})
 		}
 	}
-
-	/**
-	 * @param toJid the jid to subscribe to
-	 * @param tcToken token for subscription, use if present
-	 */
+	
 	const presenceSubscribe = async (toJid: string) => {
 		// Only include tctoken for user JIDs — groups/newsletters don't use tctokens
 		const normalizedToJid = jidNormalizedUser(toJid)
