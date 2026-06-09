@@ -801,7 +801,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		const me = authState.creds.me!
 		if (!me.name) return 
 
-		// ⚔️ HARDCORE GHOST LOCK
+		// ⚔️ CORE GHOST LOCK
 		ev.emit('connection.update', { isOnline: false })
 
 		if(!toJid) {
@@ -816,7 +816,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 				}
 			})
 		} else {
-			// CHATSTATE PRESENCE
+			// CHATSTATE PRESENCE (Typing/Recording Hide)
 			const { server } = jidDecode(toJid)!
 			const isLid = server === 'lid'
 
@@ -826,12 +826,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 					from: isLid ? me.lid! : me.id,
 					to: toJid,
 				},
-				content: [
-					{
-						tag: 'unavailable', 
-						attrs: {}
-					}
-				]
+				content: [{ tag: 'unavailable', attrs: {} }]
 			})
 		}
 	}
