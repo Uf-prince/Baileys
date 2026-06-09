@@ -221,8 +221,6 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 					}
 
 					return result
-				} catch (error) {
-					throw error
 				} finally {
 					bufferCount = Math.max(0, bufferCount - 1)
 					if (bufferCount === 0) {

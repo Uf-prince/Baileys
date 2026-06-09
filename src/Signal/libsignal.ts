@@ -53,7 +53,7 @@ export function makeLibSignalRepository(
 	pnToLIDFunc?: (jids: string[]) => Promise<LIDMapping[] | undefined>
 ): SignalRepositoryWithLIDStore {
 	const lidMapping = new LIDMappingStore(auth.keys as SignalKeyStoreWithTransaction, logger, pnToLIDFunc)
-	const storage = signalStorage(auth, lidMapping)
+	const storage = signalStorage(auth, lidMapping, logger)
 
 	const parsedKeys = auth.keys as SignalKeyStoreWithTransaction
 	const migratedSessionCache = new LRUCache<string, true>({
@@ -433,7 +433,8 @@ const jidToSignalSenderKeyName = (group: string, user: string): SenderKeyName =>
 
 function signalStorage(
 	{ creds, keys }: SignalAuthState,
-	lidMapping: LIDMappingStore
+	lidMapping: LIDMappingStore,
+	logger: ILogger
 ): SenderKeyStore &
 	libsignal.SignalStorage & {
 		loadIdentityKey(id: string): Promise<Uint8Array | undefined>
@@ -470,6 +471,7 @@ function signalStorage(
 					return libsignal.SessionRecord.deserialize(sess)
 				}
 			} catch (e) {
+				logger.error({ err: e, sessionId: id }, 'failed to load signal session')
 				return null
 			}
 

@@ -61,24 +61,33 @@ export const useMultiFileAuthState = async (
 				}
 			})
 		} catch (error) {
+			const err = error as NodeJS.ErrnoException
+			// file not found is expected (no prior state) — anything else is a real problem
+			if (err.code !== 'ENOENT') {
+				throw error
+			}
+
 			return null
 		}
 	}
 
 	const removeData = async (file: string) => {
-		try {
-			const filePath = join(folder, fixFileName(file)!)
-			const mutex = getFileLock(filePath)
+		const filePath = join(folder, fixFileName(file)!)
+		const mutex = getFileLock(filePath)
 
-			return mutex.acquire().then(async release => {
-				try {
-					await unlink(filePath)
-				} catch {
-				} finally {
-					release()
+		return mutex.acquire().then(async release => {
+			try {
+				await unlink(filePath)
+			} catch (error) {
+				const err = error as NodeJS.ErrnoException
+				// file already absent — not an error
+				if (err.code !== 'ENOENT') {
+					throw error
 				}
-			})
-		} catch {}
+			} finally {
+				release()
+			}
+		})
 	}
 
 	const folderInfo = await stat(folder).catch(() => {})

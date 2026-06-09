@@ -280,7 +280,7 @@ export async function getAudioWaveform(buffer: Buffer | string | Readable, logge
 
 		return waveform
 	} catch (e) {
-		logger?.debug('Failed to generate waveform: ' + e)
+		logger?.debug({ err: e }, 'failed to generate waveform')
 	}
 }
 
@@ -352,7 +352,7 @@ export async function generateThumbnail(
 
 			await fs.unlink(imgFilename)
 		} catch (err) {
-			options.logger?.debug('could not generate video thumb: ' + err)
+			options.logger?.debug({ err }, 'could not generate video thumb')
 		}
 	}
 
@@ -745,8 +745,8 @@ export const uploadWithNodeHttp = async (
 				res.on('end', () => {
 					try {
 						resolve(JSON.parse(body))
-					} catch {
-						resolve(undefined)
+					} catch (parseErr) {
+						reject(new Error(`upload response JSON parse failed (status ${res.statusCode}): ${body.slice(0, 200)}`))
 					}
 				})
 			}
@@ -792,7 +792,8 @@ const uploadWithFetch = async ({
 	try {
 		return (await response.json()) as MediaUploadResult
 	} catch {
-		return undefined
+		const text = await response.text().catch(() => '')
+		throw new Error(`upload response JSON parse failed (status ${response.status}): ${text.slice(0, 200)}`)
 	}
 }
 

@@ -176,7 +176,7 @@ describe('uploadWithNodeHttp', () => {
 		await expect(uploadWithNodeHttp(params)).rejects.toThrow('Too many redirects')
 	})
 
-	it('should return undefined for non-JSON response', async () => {
+	it('should throw for non-JSON response', async () => {
 		await startServer((req, res) => {
 			let body = ''
 			req.on('data', chunk => (body += chunk))
@@ -192,9 +192,7 @@ describe('uploadWithNodeHttp', () => {
 			headers: { 'Content-Type': 'application/octet-stream' }
 		}
 
-		const result = await uploadWithNodeHttp(params)
-
-		expect(result).toBeUndefined()
+		await expect(uploadWithNodeHttp(params)).rejects.toThrow('upload response JSON parse failed')
 	})
 
 	it('should handle relative redirect URLs', async () => {

@@ -1,6 +1,6 @@
 import type { SignalKeyStoreWithTransaction } from '../Types'
-import type { BinaryNode } from '../WABinary'
 import {
+	type BinaryNode,
 	getBinaryNodeChild,
 	getBinaryNodeChildren,
 	isHostedLidUser,
@@ -10,6 +10,7 @@ import {
 	isPnUser,
 	jidNormalizedUser
 } from '../WABinary'
+import type { ILogger } from './logger'
 
 // Same phone-number pattern as WABinary's isJidBot, applied against the user
 // part so the check is invariant to @c.us ↔ @s.whatsapp.net normalization.
@@ -125,13 +126,15 @@ type TcTokenParams = {
 		keys: SignalKeyStoreWithTransaction
 	}
 	getLIDForPN: (pn: string) => Promise<string | null>
+	logger?: ILogger
 }
 
 export async function buildTcTokenFromJid({
 	authState,
 	jid,
 	baseContent = [],
-	getLIDForPN
+	getLIDForPN,
+	logger
 }: TcTokenParams): Promise<BinaryNode[] | undefined> {
 	try {
 		const storageJid = await resolveTcTokenJid(jid, getLIDForPN)
@@ -162,6 +165,7 @@ export async function buildTcTokenFromJid({
 
 		return baseContent
 	} catch (error) {
+		logger?.warn({ err: error, jid }, 'failed to build tctoken from jid')
 		return baseContent.length > 0 ? baseContent : undefined
 	}
 }

@@ -639,7 +639,9 @@ export const makeSocket = (config: SocketConfig) => {
 		if (!ws.isClosed && !ws.isClosing) {
 			try {
 				await ws.close()
-			} catch {}
+			} catch (err) {
+				logger.debug({ err }, 'error closing websocket')
+			}
 		}
 
 		for (const handler of socketEndHandlers) {
@@ -923,7 +925,7 @@ export const makeSocket = (config: SocketConfig) => {
 			await sendNode(reply)
 			void sendUnifiedSession()
 		} catch (error: any) {
-			logger.info({ trace: error.stack }, 'error in pairing')
+			logger.error({ trace: error.stack }, 'error in pairing')
 			void end(error)
 		}
 	})
