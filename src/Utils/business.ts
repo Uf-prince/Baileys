@@ -261,7 +261,9 @@ export const uploadingNecessaryImages = async (
 				timeoutMs
 			})
 
-			await fs.unlink(filePath).catch(() => { /* temp file cleanup is best-effort */ })
+			await fs.unlink(filePath).catch(() => {
+				/* temp file cleanup is best-effort */
+			})
 
 			return { url: getUrlFromDirectPath(directPath) }
 		})
