@@ -11,6 +11,7 @@ import {
 } from '../Utils/business'
 import { type BinaryNode, jidNormalizedUser, S_WHATSAPP_NET } from '../WABinary'
 import { getBinaryNodeChild } from '../WABinary/generic-utils'
+import { imageDimensionNodes, makeBizProfileQuery, makeCatalogQuery } from './business-utils'
 import { makeMessagesRecvSocket } from './messages-recv'
 
 export const makeBusinessSocket = (config: SocketConfig) => {
@@ -70,26 +71,7 @@ export const makeBusinessSocket = (config: SocketConfig) => {
 			})
 		}
 
-		const result = await query({
-			tag: 'iq',
-			attrs: {
-				to: S_WHATSAPP_NET,
-				type: 'set',
-				xmlns: 'w:biz'
-			},
-			content: [
-				{
-					tag: 'business_profile',
-					attrs: {
-						v: '3',
-						mutation_type: 'delta'
-					},
-					content: node
-				}
-			]
-		})
-
-		return result
+		return makeBizProfileQuery('set', node, query)
 	}
 
 	const updateCoverPhoto = async (photo: WAMediaUpload) => {
@@ -101,57 +83,31 @@ export const makeBusinessSocket = (config: SocketConfig) => {
 			mediaType: 'biz-cover-photo'
 		})
 
-		await query({
-			tag: 'iq',
-			attrs: {
-				to: S_WHATSAPP_NET,
-				type: 'set',
-				xmlns: 'w:biz'
-			},
-			content: [
+		await makeBizProfileQuery(
+			'set',
+			[
 				{
-					tag: 'business_profile',
-					attrs: {
-						v: '3',
-						mutation_type: 'delta'
-					},
-					content: [
-						{
-							tag: 'cover_photo',
-							attrs: { id: String(fbid), op: 'update', token: meta_hmac!, ts: String(ts) }
-						}
-					]
+					tag: 'cover_photo',
+					attrs: { id: String(fbid), op: 'update', token: meta_hmac!, ts: String(ts) }
 				}
-			]
-		})
+			],
+			query
+		)
 
 		return fbid!
 	}
 
 	const removeCoverPhoto = async (id: string) => {
-		return await query({
-			tag: 'iq',
-			attrs: {
-				to: S_WHATSAPP_NET,
-				type: 'set',
-				xmlns: 'w:biz'
-			},
-			content: [
+		return makeBizProfileQuery(
+			'set',
+			[
 				{
-					tag: 'business_profile',
-					attrs: {
-						v: '3',
-						mutation_type: 'delta'
-					},
-					content: [
-						{
-							tag: 'cover_photo',
-							attrs: { op: 'delete', id }
-						}
-					]
+					tag: 'cover_photo',
+					attrs: { op: 'delete', id }
 				}
-			]
-		})
+			],
+			query
+		)
 	}
 
 	const getCatalog = async ({ jid, limit, cursor }: GetCatalogOptions) => {
@@ -164,16 +120,7 @@ export const makeBusinessSocket = (config: SocketConfig) => {
 				attrs: {},
 				content: Buffer.from((limit || 10).toString())
 			},
-			{
-				tag: 'width',
-				attrs: {},
-				content: Buffer.from('100')
-			},
-			{
-				tag: 'height',
-				attrs: {},
-				content: Buffer.from('100')
-			}
+			...imageDimensionNodes()
 		]
 
 		if (cursor) {
@@ -184,14 +131,9 @@ export const makeBusinessSocket = (config: SocketConfig) => {
 			})
 		}
 
-		const result = await query({
-			tag: 'iq',
-			attrs: {
-				to: S_WHATSAPP_NET,
-				type: 'get',
-				xmlns: 'w:biz:catalog'
-			},
-			content: [
+		const result = await makeCatalogQuery(
+			'get',
+			[
 				{
 					tag: 'product_catalog',
 					attrs: {
@@ -200,23 +142,18 @@ export const makeBusinessSocket = (config: SocketConfig) => {
 					},
 					content: queryParamNodes
 				}
-			]
-		})
+			],
+			query
+		)
 		return parseCatalogNode(result)
 	}
 
 	const getCollections = async (jid?: string, limit = 51) => {
 		jid = jid || authState.creds.me?.id
 		jid = jidNormalizedUser(jid)
-		const result = await query({
-			tag: 'iq',
-			attrs: {
-				to: S_WHATSAPP_NET,
-				type: 'get',
-				xmlns: 'w:biz:catalog',
-				smax_id: '35'
-			},
-			content: [
+		const result = await makeCatalogQuery(
+			'get',
+			[
 				{
 					tag: 'collections',
 					attrs: {
@@ -233,20 +170,13 @@ export const makeBusinessSocket = (config: SocketConfig) => {
 							attrs: {},
 							content: Buffer.from(limit.toString())
 						},
-						{
-							tag: 'width',
-							attrs: {},
-							content: Buffer.from('100')
-						},
-						{
-							tag: 'height',
-							attrs: {},
-							content: Buffer.from('100')
-						}
+						...imageDimensionNodes()
 					]
 				}
-			]
-		})
+			],
+			query,
+			{ smax_id: '35' }
+		)
 
 		return parseCollectionsNode(result)
 	}
@@ -271,18 +201,7 @@ export const makeBusinessSocket = (config: SocketConfig) => {
 						{
 							tag: 'image_dimensions',
 							attrs: {},
-							content: [
-								{
-									tag: 'width',
-									attrs: {},
-									content: Buffer.from('100')
-								},
-								{
-									tag: 'height',
-									attrs: {},
-									content: Buffer.from('100')
-								}
-							]
+							content: imageDimensionNodes()
 						},
 						{
 							tag: 'token',
@@ -301,33 +220,17 @@ export const makeBusinessSocket = (config: SocketConfig) => {
 		update = await uploadingNecessaryImagesOfProduct(update, waUploadToServer)
 		const editNode = toProductNode(productId, update)
 
-		const result = await query({
-			tag: 'iq',
-			attrs: {
-				to: S_WHATSAPP_NET,
-				type: 'set',
-				xmlns: 'w:biz:catalog'
-			},
-			content: [
+		const result = await makeCatalogQuery(
+			'set',
+			[
 				{
 					tag: 'product_catalog_edit',
 					attrs: { v: '1' },
-					content: [
-						editNode,
-						{
-							tag: 'width',
-							attrs: {},
-							content: '100'
-						},
-						{
-							tag: 'height',
-							attrs: {},
-							content: '100'
-						}
-					]
+					content: [editNode, ...imageDimensionNodes()]
 				}
-			]
-		})
+			],
+			query
+		)
 
 		const productCatalogEditNode = getBinaryNodeChild(result, 'product_catalog_edit')
 		const productNode = getBinaryNodeChild(productCatalogEditNode, 'product')
@@ -341,33 +244,17 @@ export const makeBusinessSocket = (config: SocketConfig) => {
 		create = await uploadingNecessaryImagesOfProduct(create, waUploadToServer)
 		const createNode = toProductNode(undefined, create)
 
-		const result = await query({
-			tag: 'iq',
-			attrs: {
-				to: S_WHATSAPP_NET,
-				type: 'set',
-				xmlns: 'w:biz:catalog'
-			},
-			content: [
+		const result = await makeCatalogQuery(
+			'set',
+			[
 				{
 					tag: 'product_catalog_add',
 					attrs: { v: '1' },
-					content: [
-						createNode,
-						{
-							tag: 'width',
-							attrs: {},
-							content: '100'
-						},
-						{
-							tag: 'height',
-							attrs: {},
-							content: '100'
-						}
-					]
+					content: [createNode, ...imageDimensionNodes()]
 				}
-			]
-		})
+			],
+			query
+		)
 
 		const productCatalogAddNode = getBinaryNodeChild(result, 'product_catalog_add')
 		const productNode = getBinaryNodeChild(productCatalogAddNode, 'product')
@@ -376,14 +263,9 @@ export const makeBusinessSocket = (config: SocketConfig) => {
 	}
 
 	const productDelete = async (productIds: string[]) => {
-		const result = await query({
-			tag: 'iq',
-			attrs: {
-				to: S_WHATSAPP_NET,
-				type: 'set',
-				xmlns: 'w:biz:catalog'
-			},
-			content: [
+		const result = await makeCatalogQuery(
+			'set',
+			[
 				{
 					tag: 'product_catalog_delete',
 					attrs: { v: '1' },
@@ -399,8 +281,9 @@ export const makeBusinessSocket = (config: SocketConfig) => {
 						]
 					}))
 				}
-			]
-		})
+			],
+			query
+		)
 
 		const productCatalogDelNode = getBinaryNodeChild(result, 'product_catalog_delete')
 		return {

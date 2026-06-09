@@ -1,38 +1,29 @@
 import { proto } from '../../WAProto/index.js'
-import {
-	type GroupMetadata,
-	type GroupParticipant,
-	type ParticipantAction,
-	type SocketConfig,
-	type WAMessageKey,
-	WAMessageStubType
-} from '../Types'
+import type { ParticipantAction, SocketConfig, WAMessageKey } from '../Types'
+import { WAMessageStubType } from '../Types'
 import { generateMessageID, generateMessageIDV2, unixTimestampSeconds } from '../Utils'
 import logger from '../Utils/logger'
-import {
-	type BinaryNode,
-	getBinaryNodeChild,
-	getBinaryNodeChildren,
-	getBinaryNodeChildString,
-	jidEncode,
-	jidNormalizedUser
-} from '../WABinary'
+import { type BinaryNode, getBinaryNodeChild, getBinaryNodeChildren, jidEncode, jidNormalizedUser } from '../WABinary'
 import { makeBusinessSocket } from './business'
+import {
+	acceptInviteCode,
+	extractEntityMetadata,
+	fetchAllParticipating,
+	fetchInviteCode,
+	fetchMembershipRequests,
+	makeGroupIqQuery,
+	parseParticipantResult,
+	revokeInviteCode,
+	toParticipantNodes,
+	updateMembershipRequests
+} from './group-utils'
 
 export const makeCommunitiesSocket = (config: SocketConfig) => {
 	const sock = makeBusinessSocket(config)
 	const { authState, ev, query, upsertMessage } = sock
 
 	const communityQuery = async (jid: string, type: 'get' | 'set', content: BinaryNode[]) =>
-		query({
-			tag: 'iq',
-			attrs: {
-				type,
-				xmlns: 'w:g2',
-				to: jid
-			},
-			content
-		})
+		makeGroupIqQuery(jid, type, content, query)
 
 	const communityMetadata = async (jid: string) => {
 		const result = await communityQuery(jid, 'get', [{ tag: 'query', attrs: { request: 'interactive' } }])
@@ -40,37 +31,7 @@ export const makeCommunitiesSocket = (config: SocketConfig) => {
 	}
 
 	const communityFetchAllParticipating = async () => {
-		const result = await query({
-			tag: 'iq',
-			attrs: {
-				to: '@g.us',
-				xmlns: 'w:g2',
-				type: 'get'
-			},
-			content: [
-				{
-					tag: 'participating',
-					attrs: {},
-					content: [
-						{ tag: 'participants', attrs: {} },
-						{ tag: 'description', attrs: {} }
-					]
-				}
-			]
-		})
-		const data: { [_: string]: GroupMetadata } = {}
-		const communitiesChild = getBinaryNodeChild(result, 'communities')
-		if (communitiesChild) {
-			const communities = getBinaryNodeChildren(communitiesChild, 'community')
-			for (const communityNode of communities) {
-				const meta = extractCommunityMetadata({
-					tag: 'result',
-					attrs: {},
-					content: [communityNode]
-				})
-				data[meta.id] = meta
-			}
-		}
+		const data = await fetchAllParticipating('communities', 'community', extractCommunityMetadata, query)
 
 		sock.ev.emit('groups.update', Object.values(data))
 
@@ -158,13 +119,7 @@ export const makeCommunitiesSocket = (config: SocketConfig) => {
 						subject,
 						key
 					},
-					content: [
-						...participants.map(jid => ({
-							tag: 'participant',
-							attrs: { jid }
-						})),
-						{ tag: 'linked_parent', attrs: { jid: parentCommunityJid } }
-					]
+					content: [...toParticipantNodes(participants), { tag: 'linked_parent', attrs: { jid: parentCommunityJid } }]
 				}
 			])
 			return await parseGroupResult(result)
@@ -250,56 +205,20 @@ export const makeCommunitiesSocket = (config: SocketConfig) => {
 			}
 		},
 		communityRequestParticipantsList: async (jid: string) => {
-			const result = await communityQuery(jid, 'get', [
-				{
-					tag: 'membership_approval_requests',
-					attrs: {}
-				}
-			])
-			const node = getBinaryNodeChild(result, 'membership_approval_requests')
-			const participants = getBinaryNodeChildren(node, 'membership_approval_request')
-			return participants.map(v => v.attrs)
+			return fetchMembershipRequests(jid, communityQuery)
 		},
 		communityRequestParticipantsUpdate: async (jid: string, participants: string[], action: 'approve' | 'reject') => {
-			const result = await communityQuery(jid, 'set', [
-				{
-					tag: 'membership_requests_action',
-					attrs: {},
-					content: [
-						{
-							tag: action,
-							attrs: {},
-							content: participants.map(jid => ({
-								tag: 'participant',
-								attrs: { jid }
-							}))
-						}
-					]
-				}
-			])
-			const node = getBinaryNodeChild(result, 'membership_requests_action')
-			const nodeAction = getBinaryNodeChild(node, action)
-			const participantsAffected = getBinaryNodeChildren(nodeAction, 'participant')
-			return participantsAffected.map(p => {
-				return { status: p.attrs.error || '200', jid: p.attrs.jid }
-			})
+			return updateMembershipRequests(jid, participants, action, communityQuery)
 		},
 		communityParticipantsUpdate: async (jid: string, participants: string[], action: ParticipantAction) => {
 			const result = await communityQuery(jid, 'set', [
 				{
 					tag: action,
 					attrs: action === 'remove' ? { linked_groups: 'true' } : {},
-					content: participants.map(jid => ({
-						tag: 'participant',
-						attrs: { jid }
-					}))
+					content: toParticipantNodes(participants)
 				}
 			])
-			const node = getBinaryNodeChild(result, action)
-			const participantsAffected = getBinaryNodeChildren(node, 'participant')
-			return participantsAffected.map(p => {
-				return { status: p.attrs.error || '200', jid: p.attrs.jid, content: p }
-			})
+			return parseParticipantResult(result, action)
 		},
 		communityUpdateDescription: async (jid: string, description?: string) => {
 			const metadata = await communityMetadata(jid)
@@ -317,19 +236,13 @@ export const makeCommunitiesSocket = (config: SocketConfig) => {
 			])
 		},
 		communityInviteCode: async (jid: string) => {
-			const result = await communityQuery(jid, 'get', [{ tag: 'invite', attrs: {} }])
-			const inviteNode = getBinaryNodeChild(result, 'invite')
-			return inviteNode?.attrs.code
+			return fetchInviteCode(jid, communityQuery)
 		},
 		communityRevokeInvite: async (jid: string) => {
-			const result = await communityQuery(jid, 'set', [{ tag: 'invite', attrs: {} }])
-			const inviteNode = getBinaryNodeChild(result, 'invite')
-			return inviteNode?.attrs.code
+			return revokeInviteCode(jid, communityQuery)
 		},
 		communityAcceptInvite: async (code: string) => {
-			const results = await communityQuery('@g.us', 'set', [{ tag: 'invite', attrs: { code } }])
-			const result = getBinaryNodeChild(results, 'community')
-			return result?.attrs.jid
+			return acceptInviteCode(code, 'community', communityQuery)
 		},
 
 		/**
@@ -340,7 +253,11 @@ export const makeCommunitiesSocket = (config: SocketConfig) => {
 		 */
 		communityRevokeInviteV4: async (communityJid: string, invitedJid: string) => {
 			const result = await communityQuery(communityJid, 'set', [
-				{ tag: 'revoke', attrs: {}, content: [{ tag: 'participant', attrs: { jid: invitedJid } }] }
+				{
+					tag: 'revoke',
+					attrs: {},
+					content: toParticipantNodes([invitedJid])
+				}
 			])
 			return !!result
 		},
@@ -432,46 +349,5 @@ export const makeCommunitiesSocket = (config: SocketConfig) => {
 }
 
 export const extractCommunityMetadata = (result: BinaryNode) => {
-	const community = getBinaryNodeChild(result, 'community')!
-	const descChild = getBinaryNodeChild(community, 'description')
-	let desc: string | undefined
-	let descId: string | undefined
-	if (descChild) {
-		desc = getBinaryNodeChildString(descChild, 'body')
-		descId = descChild.attrs.id
-	}
-
-	const communityId = community.attrs.id?.includes('@')
-		? community.attrs.id
-		: jidEncode(community.attrs.id || '', 'g.us')
-	const eph = getBinaryNodeChild(community, 'ephemeral')?.attrs.expiration
-	const memberAddMode = getBinaryNodeChildString(community, 'member_add_mode') === 'all_member_add'
-	const metadata: GroupMetadata = {
-		id: communityId,
-		subject: community.attrs.subject || '',
-		subjectOwner: community.attrs.s_o,
-		subjectTime: Number(community.attrs.s_t || 0),
-		size: getBinaryNodeChildren(community, 'participant').length,
-		creation: Number(community.attrs.creation || 0),
-		owner: community.attrs.creator ? jidNormalizedUser(community.attrs.creator) : undefined,
-		desc,
-		descId,
-		linkedParent: getBinaryNodeChild(community, 'linked_parent')?.attrs.jid || undefined,
-		restrict: !!getBinaryNodeChild(community, 'locked'),
-		announce: !!getBinaryNodeChild(community, 'announcement'),
-		isCommunity: !!getBinaryNodeChild(community, 'parent'),
-		isCommunityAnnounce: !!getBinaryNodeChild(community, 'default_sub_community'),
-		joinApprovalMode: !!getBinaryNodeChild(community, 'membership_approval_mode'),
-		memberAddMode,
-		participants: getBinaryNodeChildren(community, 'participant').map(({ attrs }) => {
-			return {
-				// TODO: IMPLEMENT THE PN/LID FIELDS HERE!!
-				id: attrs.jid!,
-				admin: (attrs.type || null) as GroupParticipant['admin']
-			}
-		}),
-		ephemeralDuration: eph ? +eph : undefined,
-		addressingMode: getBinaryNodeChildString(community, 'addressing_mode')! as GroupMetadata['addressingMode']
-	}
-	return metadata
+	return extractEntityMetadata(result, { entityTag: 'community', extended: false })
 }

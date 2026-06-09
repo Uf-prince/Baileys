@@ -1,34 +1,29 @@
 import { Boom } from '@hapi/boom'
 import { proto } from '../../WAProto/index.js'
-import type { GroupMetadata, GroupParticipant, ParticipantAction, SocketConfig, WAMessageKey } from '../Types'
-import { WAMessageAddressingMode, WAMessageStubType } from '../Types'
+import type { ParticipantAction, SocketConfig, WAMessageKey } from '../Types'
+import { WAMessageStubType } from '../Types'
 import { generateMessageIDV2, unixTimestampSeconds } from '../Utils'
-import {
-	type BinaryNode,
-	getBinaryNodeChild,
-	getBinaryNodeChildren,
-	getBinaryNodeChildString,
-	isLidUser,
-	isPnUser,
-	jidEncode,
-	jidNormalizedUser
-} from '../WABinary'
+import { type BinaryNode, getBinaryNodeChild, isLidUser } from '../WABinary'
 import { makeChatsSocket } from './chats'
+import {
+	acceptInviteCode,
+	extractEntityMetadata,
+	fetchAllParticipating,
+	fetchInviteCode,
+	fetchMembershipRequests,
+	makeGroupIqQuery,
+	parseParticipantResult,
+	revokeInviteCode,
+	toParticipantNodes,
+	updateMembershipRequests
+} from './group-utils'
 
 export const makeGroupsSocket = (config: SocketConfig) => {
 	const sock = makeChatsSocket(config)
 	const { authState, ev, query, upsertMessage } = sock
 
 	const groupQuery = async (jid: string, type: 'get' | 'set', content: BinaryNode[]) =>
-		query({
-			tag: 'iq',
-			attrs: {
-				type,
-				xmlns: 'w:g2',
-				to: jid
-			},
-			content
-		})
+		makeGroupIqQuery(jid, type, content, query)
 
 	// Helper: LID ko PN mein convert karo
 	const resolveParticipantJid = (jid: string): string => {
@@ -43,6 +38,7 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 				if (lid === lidNum || lid === jid) return `${pn}@s.whatsapp.net`
 			}
 		}
+
 		return jid
 	}
 
@@ -52,37 +48,7 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 	}
 
 	const groupFetchAllParticipating = async () => {
-		const result = await query({
-			tag: 'iq',
-			attrs: {
-				to: '@g.us',
-				xmlns: 'w:g2',
-				type: 'get'
-			},
-			content: [
-				{
-					tag: 'participating',
-					attrs: {},
-					content: [
-						{ tag: 'participants', attrs: {} },
-						{ tag: 'description', attrs: {} }
-					]
-				}
-			]
-		})
-		const data: { [_: string]: GroupMetadata } = {}
-		const groupsChild = getBinaryNodeChild(result, 'groups')
-		if (groupsChild) {
-			const groups = getBinaryNodeChildren(groupsChild, 'group')
-			for (const groupNode of groups) {
-				const meta = extractGroupMetadata({
-					tag: 'result',
-					attrs: {},
-					content: [groupNode]
-				})
-				data[meta.id] = meta
-			}
-		}
+		const data = await fetchAllParticipating('groups', 'group', extractGroupMetadata, query)
 
 		sock.ev.emit('groups.update', Object.values(data))
 
@@ -111,10 +77,7 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 						subject,
 						key
 					},
-					content: participants.map(jid => ({
-						tag: 'participant',
-						attrs: { jid: resolveParticipantJid(jid) }
-					}))
+					content: toParticipantNodes(participants.map(resolveParticipantJid))
 				}
 			])
 			return extractGroupMetadata(result)
@@ -138,39 +101,10 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 			])
 		},
 		groupRequestParticipantsList: async (jid: string) => {
-			const result = await groupQuery(jid, 'get', [
-				{
-					tag: 'membership_approval_requests',
-					attrs: {}
-				}
-			])
-			const node = getBinaryNodeChild(result, 'membership_approval_requests')
-			const participants = getBinaryNodeChildren(node, 'membership_approval_request')
-			return participants.map(v => v.attrs)
+			return fetchMembershipRequests(jid, groupQuery)
 		},
 		groupRequestParticipantsUpdate: async (jid: string, participants: string[], action: 'approve' | 'reject') => {
-			const result = await groupQuery(jid, 'set', [
-				{
-					tag: 'membership_requests_action',
-					attrs: {},
-					content: [
-						{
-							tag: action,
-							attrs: {},
-							content: participants.map(jid => ({
-								tag: 'participant',
-								attrs: { jid: resolveParticipantJid(jid) }
-							}))
-						}
-					]
-				}
-			])
-			const node = getBinaryNodeChild(result, 'membership_requests_action')
-			const nodeAction = getBinaryNodeChild(node, action)
-			const participantsAffected = getBinaryNodeChildren(nodeAction, 'participant')
-			return participantsAffected.map(p => {
-				return { status: p.attrs.error || '200', jid: p.attrs.jid }
-			})
+			return updateMembershipRequests(jid, participants.map(resolveParticipantJid), action, groupQuery)
 		},
 		groupParticipantsUpdate: async (jid: string, participants: string[], action: ParticipantAction) => {
 			// LID → PN conversion — v7 fix
@@ -182,10 +116,7 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 					{
 						tag: action,
 						attrs: {},
-						content: resolvedParticipants.map(jid => ({
-							tag: 'participant',
-							attrs: { jid }
-						}))
+						content: toParticipantNodes(resolvedParticipants)
 					}
 				])
 			} catch (err: any) {
@@ -194,19 +125,12 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 					{
 						tag: action,
 						attrs: {},
-						content: participants.map(jid => ({
-							tag: 'participant',
-							attrs: { jid }
-						}))
+						content: toParticipantNodes(participants)
 					}
 				])
 			}
 
-			const node = getBinaryNodeChild(result, action)
-			const participantsAffected = getBinaryNodeChildren(node, 'participant')
-			return participantsAffected.map(p => {
-				return { status: p.attrs.error || '200', jid: p.attrs.jid, content: p }
-			})
+			return parseParticipantResult(result, action)
 		},
 		groupUpdateDescription: async (jid: string, description?: string) => {
 			const metadata = await groupMetadata(jid)
@@ -224,24 +148,22 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 			])
 		},
 		groupInviteCode: async (jid: string) => {
-			const result = await groupQuery(jid, 'get', [{ tag: 'invite', attrs: {} }])
-			const inviteNode = getBinaryNodeChild(result, 'invite')
-			return inviteNode?.attrs.code
+			return fetchInviteCode(jid, groupQuery)
 		},
 		groupRevokeInvite: async (jid: string) => {
-			const result = await groupQuery(jid, 'set', [{ tag: 'invite', attrs: {} }])
-			const inviteNode = getBinaryNodeChild(result, 'invite')
-			return inviteNode?.attrs.code
+			return revokeInviteCode(jid, groupQuery)
 		},
 		groupAcceptInvite: async (code: string) => {
-			const results = await groupQuery('@g.us', 'set', [{ tag: 'invite', attrs: { code } }])
-			const result = getBinaryNodeChild(results, 'group')
-			return result?.attrs.jid
+			return acceptInviteCode(code, 'group', groupQuery)
 		},
 
 		groupRevokeInviteV4: async (groupJid: string, invitedJid: string) => {
 			const result = await groupQuery(groupJid, 'set', [
-				{ tag: 'revoke', attrs: {}, content: [{ tag: 'participant', attrs: { jid: resolveParticipantJid(invitedJid) } }] }
+				{
+					tag: 'revoke',
+					attrs: {},
+					content: toParticipantNodes([resolveParticipantJid(invitedJid)])
+				}
 			])
 			return !!result
 		},
@@ -356,65 +278,7 @@ export const extractGroupMetadata = (result: BinaryNode) => {
 		throw new Boom('Invalid group metadata response: missing group id', { data: group })
 	}
 
-	const descChild = getBinaryNodeChild(group, 'description')
-	let desc: string | undefined
-	let descId: string | undefined
-	let descOwner: string | undefined
-	let descOwnerPn: string | undefined
-	let descOwnerUsername: string | undefined
-	let descTime: number | undefined
-	if (descChild) {
-		desc = getBinaryNodeChildString(descChild, 'body')
-		descOwner = descChild.attrs.participant ? jidNormalizedUser(descChild.attrs.participant) : undefined
-		descOwnerPn = descChild.attrs.participant_pn ? jidNormalizedUser(descChild.attrs.participant_pn) : undefined
-		descOwnerUsername = descChild.attrs.participant_username || undefined
-		descTime = +descChild.attrs.t!
-		descId = descChild.attrs.id
-	}
-
-	const groupId = group.attrs.id.includes('@') ? group.attrs.id : jidEncode(group.attrs.id, 'g.us')
-	const eph = getBinaryNodeChild(group, 'ephemeral')?.attrs.expiration
-	const memberAddMode = getBinaryNodeChildString(group, 'member_add_mode') === 'all_member_add'
-	const metadata: GroupMetadata = {
-		id: groupId,
-		notify: group.attrs.notify,
-		addressingMode: group.attrs.addressing_mode === 'lid' ? WAMessageAddressingMode.LID : WAMessageAddressingMode.PN,
-		subject: group.attrs.subject!,
-		subjectOwner: group.attrs.s_o,
-		subjectOwnerPn: group.attrs.s_o_pn,
-		subjectOwnerUsername: group.attrs.s_o_username,
-		subjectTime: +group.attrs.s_t!,
-		size: group.attrs.size ? +group.attrs.size : getBinaryNodeChildren(group, 'participant').length,
-		creation: +group.attrs.creation!,
-		owner: group.attrs.creator ? jidNormalizedUser(group.attrs.creator) : undefined,
-		ownerPn: group.attrs.creator_pn ? jidNormalizedUser(group.attrs.creator_pn) : undefined,
-		ownerUsername: group.attrs.creator_username || undefined,
-		owner_country_code: group.attrs.creator_country_code,
-		desc,
-		descId,
-		descOwner,
-		descOwnerPn,
-		descOwnerUsername,
-		descTime,
-		linkedParent: getBinaryNodeChild(group, 'linked_parent')?.attrs.jid || undefined,
-		restrict: !!getBinaryNodeChild(group, 'locked'),
-		announce: !!getBinaryNodeChild(group, 'announcement'),
-		isCommunity: !!getBinaryNodeChild(group, 'parent'),
-		isCommunityAnnounce: !!getBinaryNodeChild(group, 'default_sub_group'),
-		joinApprovalMode: !!getBinaryNodeChild(group, 'membership_approval_mode'),
-		memberAddMode,
-		participants: getBinaryNodeChildren(group, 'participant').map(({ attrs }) => {
-			return {
-				id: attrs.jid!,
-				phoneNumber: isLidUser(attrs.jid) && isPnUser(attrs.phone_number) ? attrs.phone_number : undefined,
-				lid: isPnUser(attrs.jid) && isLidUser(attrs.lid) ? attrs.lid : undefined,
-				username: attrs.participant_username || attrs.username || undefined,
-				admin: (attrs.type || null) as GroupParticipant['admin']
-			}
-		}),
-		ephemeralDuration: eph ? +eph : undefined
-	}
-	return metadata
+	return extractEntityMetadata(result, { entityTag: 'group', extended: true })
 }
 
 export type GroupsSocket = ReturnType<typeof makeGroupsSocket>

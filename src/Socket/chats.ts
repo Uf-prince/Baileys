@@ -296,24 +296,27 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		}
 	}
 
-	/** update the profile picture for yourself or a group */
-	const updateProfilePicture = async (
-		jid: string,
-		content: WAMediaUpload,
-		dimensions?: { width: number; height: number }
-	) => {
-		let targetJid
+	/**
+	 * Resolve the target JID for a profile-picture IQ.
+	 * Returns `undefined` when the jid matches the authenticated user (self-update).
+	 */
+	const resolveProfileTarget = (jid: string): string | undefined => {
 		if (!jid) {
 			throw new Boom(
 				'Illegal no-jid profile update. Please specify either your ID or the ID of the chat you wish to update'
 			)
 		}
 
-		if (jidNormalizedUser(jid) !== jidNormalizedUser(authState.creds.me!.id)) {
-			targetJid = jidNormalizedUser(jid) // in case it is someone other than us
-		} else {
-			targetJid = undefined
-		}
+		return jidNormalizedUser(jid) !== jidNormalizedUser(authState.creds.me!.id) ? jidNormalizedUser(jid) : undefined
+	}
+
+	/** update the profile picture for yourself or a group */
+	const updateProfilePicture = async (
+		jid: string,
+		content: WAMediaUpload,
+		dimensions?: { width: number; height: number }
+	) => {
+		const targetJid = resolveProfileTarget(jid)
 
 		const { img } = await generateProfilePicture(content, dimensions)
 		await query({
@@ -336,18 +339,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 
 	/** remove the profile picture for yourself or a group */
 	const removeProfilePicture = async (jid: string) => {
-		let targetJid
-		if (!jid) {
-			throw new Boom(
-				'Illegal no-jid profile update. Please specify either your ID or the ID of the chat you wish to update'
-			)
-		}
-
-		if (jidNormalizedUser(jid) !== jidNormalizedUser(authState.creds.me!.id)) {
-			targetJid = jidNormalizedUser(jid) // in case it is someone other than us
-		} else {
-			targetJid = undefined
-		}
+		const targetJid = resolveProfileTarget(jid)
 
 		await query({
 			tag: 'iq',
@@ -799,20 +791,20 @@ export const makeChatsSocket = (config: SocketConfig) => {
 
 	const sendPresenceUpdate = async (type: WAPresence, toJid?: string) => {
 		const me = authState.creds.me!
-		if (!me.name) return 
+		if (!me.name) return
 
 		// ⚔️ CORE GHOST LOCK
 		ev.emit('connection.update', { isOnline: false })
 
-		if(!toJid) {
+		if (!toJid) {
 			// GLOBAL PRESENCE
-			if(type === 'available') void sendUnifiedSession()
-			
+			if (type === 'available') void sendUnifiedSession()
+
 			await sendNode({
 				tag: 'presence',
 				attrs: {
 					name: me.name.replace(/@/g, ''),
-					type: 'unavailable' 
+					type: 'unavailable'
 				}
 			})
 		} else {
@@ -824,7 +816,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 				tag: 'chatstate',
 				attrs: {
 					from: isLid ? me.lid! : me.id,
-					to: toJid,
+					to: toJid
 				},
 				content: [{ tag: 'unavailable', attrs: {} }]
 			})
