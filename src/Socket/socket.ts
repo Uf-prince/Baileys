@@ -725,7 +725,8 @@ export const makeSocket = (config: SocketConfig) => {
 				xmlns: 'passive',
 				type: 'set'
 			},
-			content: [{ tag, attrs: {} }]
+			// ⚔️ GHOST LOCK: Tag chahay 'active' aaye, hum hamesha 'passive' bhejenge
+			content: [{ tag: 'passive', attrs: {} }]
 		})
 
 	/** logout & invalidate connection */
